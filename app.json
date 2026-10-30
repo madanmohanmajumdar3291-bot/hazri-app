@@ -1,0 +1,92 @@
+{
+  "expo": {
+    "name": "Hazri",
+    "slug": "facemark-owner",
+    "version": "1.0.0",
+    "scheme": "hazri",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1B4B43"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.facemark.owner"
+    },
+    "android": {
+      "package": "com.facemark.owner",
+      "versionCode": 34,
+      "edgeToEdgeEnabled": true,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1B4B43"
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-sqlite",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "FaceMark needs camera access to register and verify faces for attendance."
+        }
+      ],
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Hazri uses your location to verify you're checking in from an approved site.",
+          "locationAlwaysPermission": "Hazri tracks field employees' location during their shift only, so their route and site visits can be recorded. Tracking stops automatically at check-out.",
+          "locationWhenInUsePermission": "Hazri uses your location to verify you're checking in from an approved site.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      "expo-task-manager",
+      "react-native-fast-tflite",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "buildArchs": [
+              "armeabi-v7a",
+              "arm64-v8a"
+            ]
+          }
+        }
+      ],
+      "expo-web-browser",
+      "expo-secure-store",
+      "expo-background-task"
+    ],
+    "owner": "madan3291s-tea",
+    "extra": {
+      "eas": {
+        "projectId": "897b5117-87f8-45de-b3e4-8170fd6a94b4"
+      }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/897b5117-87f8-45de-b3e4-8170fd6a94b4"
+    }
+  }
+}
