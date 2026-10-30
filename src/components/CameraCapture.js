@@ -18,6 +18,37 @@ const AUTO_CAPTURE_HOLD_MS = 500;
 // reliably readable from disk — capturing immediately can hand back a URI
 // that isn't fully flushed yet.
 const POST_CAPTURE_DELAY_MS = 300;
+// A face only counts once it has been seen inside the scan square on this
+// many live frames in a row — one stray frame (or a result left over from
+// the previous angle) can no longer trigger a capture on its own.
+const STEADY_FRAMES_REQUIRED = 2;
+// If the parent never flips `processing` after a capture, unlock capturing
+// again after this long so the screen can't get stuck.
+const CAPTURE_LOCK_FALLBACK_MS = 4000;
+
+// The photo covers more than the on-screen square shows, so a face detected
+// at the edge of the photo can be outside the square the person is looking
+// at. Accept only a face that sits well inside the frame, near its centre,
+// and big enough to fill a fair part of it. The bounds are symmetric so
+// they hold whichever way the raw (skipProcessing) photo is rotated.
+const SQUARE_EDGE_MARGIN = 0.06;
+const SQUARE_CENTER_TOLERANCE = 0.2;
+const MIN_FACE_FRACTION = 0.2;
+
+export function isFaceInSquare(faceBox) {
+  if (!faceBox || !faceBox.imageWidth || !faceBox.imageHeight) return true;
+  const { left, top, width, height, imageWidth, imageHeight } = faceBox;
+  const x0 = left / imageWidth;
+  const y0 = top / imageHeight;
+  const x1 = (left + width) / imageWidth;
+  const y1 = (top + height) / imageHeight;
+  const insideEdges =
+    x0 >= SQUARE_EDGE_MARGIN && y0 >= SQUARE_EDGE_MARGIN && x1 <= 1 - SQUARE_EDGE_MARGIN && y1 <= 1 - SQUARE_EDGE_MARGIN;
+  const centered =
+    Math.abs((x0 + x1) / 2 - 0.5) <= SQUARE_CENTER_TOLERANCE && Math.abs((y0 + y1) / 2 - 0.5) <= SQUARE_CENTER_TOLERANCE;
+  const bigEnough = Math.min(width, height) / Math.min(imageWidth, imageHeight) >= MIN_FACE_FRACTION;
+  return insideEdges && centered && bigEnough;
+}
 
 // Same circular ScanRing viewfinder as the Home screen's check-in scanner —
 // every face-capture moment in the app (enrollment, re-registration, kiosk)
@@ -47,15 +78,24 @@ export default function CameraCapture({
   const [permission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState(defaultFacing);
   const [liveDetected, setLiveDetected] = useState(false);
+  const [faceOutside, setFaceOutside] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const cameraRef = useRef(null);
   const liveScanningRef = useRef(false);
+  // Bumped on every capture and every new instruction, so a live-scan result
+  // that started before either is thrown away instead of counting toward
+  // the next angle.
+  const generationRef = useRef(0);
+  const steadyFramesRef = useRef(0);
+  const capturingRef = useRef(false);
+  const captureLockTimerRef = useRef(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      clearTimeout(captureLockTimerRef.current);
     };
   }, []);
 
@@ -66,14 +106,22 @@ export default function CameraCapture({
     if (!permission?.granted || !cameraReady || processing) return;
 
     const timer = setInterval(async () => {
-      if (liveScanningRef.current || processing || !cameraRef.current) return;
+      if (liveScanningRef.current || capturingRef.current || processing || !cameraRef.current) return;
       liveScanningRef.current = true;
+      const generation = generationRef.current;
       try {
         const photo = await cameraRef.current.takePictureAsync({ quality: 0.3, skipProcessing: true, shutterSound: false });
         const result = await generateEmbedding(photo.uri);
-        if (mountedRef.current) setLiveDetected(result.success);
+        if (!mountedRef.current || generation !== generationRef.current) return;
+        const inSquare = result.success && isFaceInSquare(result.faceBox);
+        steadyFramesRef.current = inSquare ? steadyFramesRef.current + 1 : 0;
+        setFaceOutside(result.success && !inSquare);
+        setLiveDetected(steadyFramesRef.current >= STEADY_FRAMES_REQUIRED);
       } catch (_e) {
-        if (mountedRef.current) setLiveDetected(false);
+        if (mountedRef.current && generation === generationRef.current) {
+          steadyFramesRef.current = 0;
+          setLiveDetected(false);
+        }
       } finally {
         liveScanningRef.current = false;
       }
@@ -82,25 +130,58 @@ export default function CameraCapture({
     return () => clearInterval(timer);
   }, [permission?.granted, cameraReady, processing]);
 
-  useEffect(() => {
+  function resetLiveDetection() {
+    generationRef.current += 1;
+    steadyFramesRef.current = 0;
     setLiveDetected(false);
+    setFaceOutside(false);
+  }
+
+  function releaseCaptureLock() {
+    clearTimeout(captureLockTimerRef.current);
+    capturingRef.current = false;
+  }
+
+  // New angle: start detection from scratch and allow the next capture.
+  useEffect(() => {
+    resetLiveDetection();
+    releaseCaptureLock();
   }, [instruction]);
 
+  // The parent finished handling a capture (e.g. it failed and asks again
+  // for the same angle): allow capturing again.
+  useEffect(() => {
+    if (!processing) releaseCaptureLock();
+  }, [processing]);
+
   const handleCapture = useCallback(async () => {
-    if (!cameraRef.current || processing || !cameraReady) return;
+    // One capture at a time: auto-capture and the manual button used to be
+    // able to fire together, saving the same angle twice.
+    if (!cameraRef.current || processing || !cameraReady || capturingRef.current) return;
+    capturingRef.current = true;
+    resetLiveDetection();
+    captureLockTimerRef.current = setTimeout(() => {
+      capturingRef.current = false;
+    }, CAPTURE_LOCK_FALLBACK_MS);
     // skipProcessing:true here to match every live-scan capture elsewhere in
     // the app (Home/Kiosk attendance, Menu Unlock) — what matters for a
     // correct match later is that registration and live-scanning treat
     // orientation the SAME way, not which convention they use. Skipping
     // processing on both sides is also far cheaper per-frame, which matters
     // a lot on lower-end Android devices doing this repeatedly.
-    const photo = await cameraRef.current.takePictureAsync({
-      quality: 0.7,
-      base64: false,
-      exif: false,
-      skipProcessing: true,
-      shutterSound: false,
-    });
+    let photo;
+    try {
+      photo = await cameraRef.current.takePictureAsync({
+        quality: 0.7,
+        base64: false,
+        exif: false,
+        skipProcessing: true,
+        shutterSound: false,
+      });
+    } catch (_e) {
+      releaseCaptureLock();
+      return;
+    }
     // Give Android a moment to finish writing the file before we read it.
     setTimeout(() => onCapture(photo.uri), POST_CAPTURE_DELAY_MS);
   }, [processing, cameraReady, onCapture]);
@@ -183,7 +264,9 @@ export default function CameraCapture({
             ? 'Processing face...'
             : liveDetected
             ? "Face detected ✓ — hold still..."
-            : 'Line up your face in the ring'}
+            : faceOutside
+            ? 'Move your face into the square'
+            : 'Line up your face in the square'}
         </Text>
       </View>
 

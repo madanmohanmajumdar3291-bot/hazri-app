@@ -100,7 +100,9 @@ async function generateEmbeddingWeb(imageUri) {
     const rightEAR = computeEAR(result.landmarks.getRightEye());
     const eyeOpenness = (leftEAR + rightEAR) / 2;
 
-    return { success: true, embedding: Array.from(result.descriptor), eyeOpenness };
+    const { box } = result.detection;
+    const faceBox = { left: box.x, top: box.y, width: box.width, height: box.height, imageWidth: img.width, imageHeight: img.height };
+    return { success: true, embedding: Array.from(result.descriptor), eyeOpenness, faceBox };
   } catch (error) {
     return { success: false, error: 'Face processing failed. Please try again.' };
   }
@@ -295,6 +297,17 @@ async function generateEmbeddingNative(imageUri) {
         ? (face.leftEyeOpenProbability + face.rightEyeOpenProbability) / 2
         : null;
 
+    // Where the face sits in the frame — lets the capture screen insist the
+    // face is actually inside the scan square, not just somewhere in shot.
+    const faceBox = {
+      left: frame.left,
+      top: frame.top,
+      width: w,
+      height: h,
+      imageWidth: resized.width,
+      imageHeight: resized.height,
+    };
+
     // A real trained model (FaceNet) is far more accurate than the landmark
     // ratios above — use it as the actual embedding whenever it works, and
     // only fall back to the landmark heuristic (already computed above) if
@@ -304,7 +317,7 @@ async function generateEmbeddingNative(imageUri) {
     try {
       const { generateFaceNetEmbedding } = require('./faceNetModel');
       const faceNetEmbedding = await generateFaceNetEmbedding(resized.uri, frame, resized.width, resized.height);
-      return { success: true, embedding: faceNetEmbedding, eyeOpenness };
+      return { success: true, embedding: faceNetEmbedding, eyeOpenness, faceBox };
     } catch (faceNetError) {
       console.warn('[faceService] FaceNet embedding failed, falling back to landmark heuristic:', faceNetError?.message);
       // TEMPORARY diagnostic logging — FaceNet has been silently failing on
@@ -326,7 +339,7 @@ async function generateEmbeddingNative(imageUri) {
       } catch (_loggingSetupError) {
         // Never let the debug logging itself break face registration.
       }
-      return { success: true, embedding, eyeOpenness };
+      return { success: true, embedding, eyeOpenness, faceBox };
     }
   } catch (error) {
     return { success: false, error: 'Face processing failed. Please try again.' };
