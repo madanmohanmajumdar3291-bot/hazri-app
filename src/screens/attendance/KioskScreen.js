@@ -107,6 +107,8 @@ export default function KioskScreen({ navigation }) {
         <View>
           <ScanRing width={frameWidth} height={frameHeight} status={ringStatus}>
             <CameraView
+              // No white shutter flash: scanning screens capture every 0.7s.
+              animateShutter={false}
               key={cameraKey}
               ref={cameraRef}
               style={StyleSheet.absoluteFillObject}

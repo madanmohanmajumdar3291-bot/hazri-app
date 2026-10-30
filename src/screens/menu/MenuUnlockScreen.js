@@ -313,6 +313,8 @@ export default function MenuUnlockScreen({ route, navigation }) {
         <View>
           <ScanRing width={frameWidth} height={frameHeight} status={error ? 'fail' : 'scanning'}>
             <CameraView
+              // No white shutter flash: scanning screens capture every 0.7s.
+              animateShutter={false}
               key={cameraKey}
               ref={cameraRef}
               style={StyleSheet.absoluteFillObject}

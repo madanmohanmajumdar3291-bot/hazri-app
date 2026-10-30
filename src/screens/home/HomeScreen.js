@@ -211,6 +211,8 @@ export default function HomeScreen({ navigation }) {
                 <ActivityIndicator color={colors.white} />
               ) : permission.granted ? (
                 <CameraView
+                  // No white shutter flash: scanning screens capture every 0.7s.
+                  animateShutter={false}
                   key={cameraKey}
                   ref={cameraRef}
                   style={StyleSheet.absoluteFillObject}

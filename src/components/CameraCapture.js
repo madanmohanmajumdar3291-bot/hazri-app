@@ -238,6 +238,8 @@ export default function CameraCapture({
         <View>
           <ScanRing width={frameWidth} height={frameHeight} status={ringStatus}>
             <CameraView
+              // No white shutter flash: scanning screens capture every 0.7s.
+              animateShutter={false}
               ref={cameraRef}
               style={StyleSheet.absoluteFillObject}
               facing={facing}
