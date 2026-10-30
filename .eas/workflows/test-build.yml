@@ -1,0 +1,12 @@
+name: Test build (preview APK)
+
+jobs:
+  build_android:
+    name: Build Android preview APK
+    type: build
+    environment: preview
+    env:
+      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: 395642880446-3888pgi1orq5m3326h02li6of89mb7qs.apps.googleusercontent.com
+    params:
+      platform: android
+      profile: preview

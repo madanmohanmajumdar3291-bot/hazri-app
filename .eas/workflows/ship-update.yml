@@ -1,0 +1,13 @@
+name: Ship OTA update to preview
+
+jobs:
+  publish_update:
+    name: Publish update to preview branch
+    type: update
+    environment: preview
+    env:
+      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: 395642880446-3888pgi1orq5m3326h02li6of89mb7qs.apps.googleusercontent.com
+    params:
+      branch: preview
+      message: Fix Google Drive sign-in (server-side token exchange, new OAuth client)
+      platform: android
