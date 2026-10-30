@@ -47,7 +47,7 @@ export default function KioskScreen({ navigation }) {
     return () => clearTimeout(timer);
   }, [permission?.granted, cameraReady, cameraKey]);
 
-  const { loadingRoster, scanning, result, liveHint, isConnected, pendingCount, lastSyncedAt, idle, resumeScanning } =
+  const { loadingRoster, scanning, result, liveHint, isConnected, pendingCount, lastSyncedAt, idle, resumeScanning, pictureSize } =
     useAttendanceScanner({
       companyId,
       cameraRef,
@@ -55,6 +55,7 @@ export default function KioskScreen({ navigation }) {
       // remounted CameraView before it's actually streaming live frames.
       enabled: Boolean(permission?.granted) && cameraReady,
       isKiosk: true,
+      facing,
     });
 
   function toggleFacing() {
@@ -110,6 +111,7 @@ export default function KioskScreen({ navigation }) {
               ref={cameraRef}
               style={StyleSheet.absoluteFillObject}
               facing={facing}
+              pictureSize={pictureSize ?? undefined}
               onCameraReady={() => setCameraReady(true)}
             />
           </ScanRing>

@@ -89,7 +89,7 @@ export default function HomeScreen({ navigation }) {
     return () => clearTimeout(timer);
   }, [permission?.granted, cameraReady, cameraKey]);
 
-  const { loadingRoster, scanning, result, liveHint, isConnected, pendingCount, lastSyncedAt, idle, resumeScanning } =
+  const { loadingRoster, scanning, result, liveHint, isConnected, pendingCount, lastSyncedAt, idle, resumeScanning, pictureSize } =
     useAttendanceScanner({
       companyId,
       cameraRef,
@@ -98,6 +98,7 @@ export default function HomeScreen({ navigation }) {
       // grabbing a stale/black frame right after coming back to this
       // screen, which could feed a bogus match into the scanner.
       enabled: Boolean(permission?.granted) && cameraReady,
+      facing,
     });
 
   const role = userData?.role;
@@ -214,6 +215,7 @@ export default function HomeScreen({ navigation }) {
                   ref={cameraRef}
                   style={StyleSheet.absoluteFillObject}
                   facing={facing}
+                  pictureSize={pictureSize ?? undefined}
                   onCameraReady={() => setCameraReady(true)}
                 />
               ) : (

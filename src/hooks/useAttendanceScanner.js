@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Platform } from 'react-native';
 import Toast from 'react-native-toast-message';
 import { generateEmbedding, withTimeout } from '../services/faceService';
 import { getCompanyEmployees, findMatchingEmployee, recordAttendance } from '../services/attendanceService';
@@ -22,12 +23,40 @@ const RESULT_DISPLAY_MS = 2500;
 // when the camera's just sitting there empty.
 const IDLE_AFTER_MISSES = 6;
 
+// Every scan frame gets shrunk to 480px wide before face detection
+// (generateEmbeddingNative), so capturing the camera's full 12MP+ photo and
+// JPEG-encoding it every 0.7s only to throw most of it away is wasted work,
+// worst on low-end phones. Ask the camera for the smallest picture size that is
+// still comfortably above 480px and keeps the preview's aspect ratio (so the
+// framing the employee sees is what gets matched). Cached per lens for the
+// app session so the camera remounts on every screen focus don't re-query.
+const MIN_SCAN_SHORT_SIDE = 480;
+const MIN_SCAN_LONG_SIDE = 640;
+const pictureSizeCache = {};
+
+function parseSize(size) {
+  const [w, h] = String(size).split('x').map(Number);
+  return w > 0 && h > 0 ? { size, long: Math.max(w, h), short: Math.min(w, h) } : null;
+}
+
+export function pickScanPictureSize(sizes) {
+  const parsed = (sizes || []).map(parseSize).filter(Boolean);
+  if (parsed.length === 0) return null;
+  const largest = parsed.reduce((a, b) => (b.long * b.short > a.long * a.short ? b : a));
+  const aspect = largest.long / largest.short;
+  const candidates = parsed
+    .filter((p) => Math.abs(p.long / p.short - aspect) < 0.02)
+    .filter((p) => p.short >= MIN_SCAN_SHORT_SIDE && p.long >= MIN_SCAN_LONG_SIDE)
+    .sort((a, b) => a.long * a.short - b.long * b.short);
+  return candidates[0]?.size ?? null;
+}
+
 // Shared walk-up-and-go attendance engine: loads the company roster, polls
 // the camera for a face, matches it, and records the check-in/check-out —
 // with no tap required. Used by both Kiosk Mode (a dedicated full-screen
 // station) and the Home screen (the same scan running right on the landing
 // screen), so the matching logic only lives in one place.
-export function useAttendanceScanner({ companyId, cameraRef, enabled, isKiosk = false }) {
+export function useAttendanceScanner({ companyId, cameraRef, enabled, isKiosk = false, facing = 'front' }) {
   const [employees, setEmployees] = useState([]);
   const [loadingRoster, setLoadingRoster] = useState(true);
   const [scanning, setScanning] = useState(false);
@@ -37,6 +66,7 @@ export function useAttendanceScanner({ companyId, cameraRef, enabled, isKiosk = 
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [liveHint, setLiveHint] = useState(null);
   const [idle, setIdle] = useState(false);
+  const [pictureSize, setPictureSize] = useState(pictureSizeCache[facing] ?? null);
 
   const scanningRef = useRef(false);
   const pausedRef = useRef(false);
@@ -112,6 +142,31 @@ export function useAttendanceScanner({ companyId, cameraRef, enabled, isKiosk = 
   }, [companyId]);
 
   useEffect(() => {
+    if (pictureSizeCache[facing]) {
+      setPictureSize(pictureSizeCache[facing]);
+      return;
+    }
+    setPictureSize(null);
+    if (!enabled || Platform.OS === 'web' || !cameraRef.current?.getAvailablePictureSizesAsync) return;
+    let cancelled = false;
+    cameraRef.current
+      .getAvailablePictureSizesAsync()
+      .then((sizes) => {
+        const size = pickScanPictureSize(sizes);
+        if (!size || cancelled) return;
+        pictureSizeCache[facing] = size;
+        setPictureSize(size);
+      })
+      .catch(() => {
+        // Unsupported on this device — keep the camera's default size.
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, facing]);
+
+  useEffect(() => {
     if (!enabled || loadingRoster) return;
 
     timerRef.current = setInterval(() => {
@@ -153,30 +208,27 @@ export function useAttendanceScanner({ companyId, cameraRef, enabled, isKiosk = 
       noFaceStreakRef.current = 0;
       setLiveHint('Face detected — verifying...');
 
-      // Cloud match (AWS Rekognition, via search-face) is tried first when
-      // online — a real trained model beats the on-device embedding
-      // comparison for telling similar-looking people apart. Falls back to
-      // the on-device match (works offline, and for anyone not yet
-      // cloud-indexed) whenever the cloud call is unavailable, times out, or
-      // simply doesn't find a confident match.
-      let match = null;
-      if (await isCloudFaceAvailable()) {
+      // On-device match first. findMatchingEmployee only returns someone when
+      // they clear both the similarity threshold AND a clear margin over the
+      // runner-up (the same bar offline scans already rely on), so a hit here
+      // is trusted as-is. The cloud (AWS Rekognition, via search-face) is only
+      // asked when the phone can't decide: unknown face, look-alikes too
+      // close to call, or someone not yet registered on-device. Asking the
+      // cloud first used to add up to 2.5s to every single scan, even the
+      // easy ones.
+      let match = findMatchingEmployee(embeddingResult.embedding, employees);
+      if (!match && (await isCloudFaceAvailable())) {
         try {
-          // Kept short deliberately — with AWS not configured yet every call
-          // here fails, and this runs before every on-device fallback match.
-          // At 6s it was eating almost the whole scan cycle on a dead cloud
-          // path; short-circuiting fast keeps the on-device path responsive.
+          // Kept short deliberately — a slow or dead cloud path must not
+          // stall the walk-up flow.
           const cloudMatch = await withTimeout(searchFaceInCloud(photo.uri), 2500);
           if (cloudMatch) {
             const employee = employees.find((e) => e.id === cloudMatch.subjectId);
             if (employee) match = { employee, score: cloudMatch.confidence };
           }
         } catch (_cloudError) {
-          // Fall through to on-device matching below.
+          // No cloud answer; treated as not recognized below.
         }
-      }
-      if (!match) {
-        match = findMatchingEmployee(embeddingResult.embedding, employees);
       }
       consecutiveErrorsRef.current = 0;
       if (!match) {
@@ -268,6 +320,7 @@ export function useAttendanceScanner({ companyId, cameraRef, enabled, isKiosk = 
     lastSyncedAt,
     idle,
     resumeScanning,
+    pictureSize,
   };
 }
 
