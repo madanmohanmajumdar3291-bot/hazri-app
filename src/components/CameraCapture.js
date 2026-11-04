@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, useWindowDimensions, Linking, ScrollView } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import ScanRing from './ScanRing';
 import FaceGuide, { directionFromInstruction } from './FaceGuide';
 import { useTheme } from '../context/ThemeContext';
 import { generateEmbedding } from '../services/faceService';
+import { PRIVACY_POLICY_URL } from '../constants/config';
 
 // Phone-unlock-speed live scanning: check for a face several times a second
 // instead of once — the guide ring reacts almost instantly to being framed.
@@ -69,6 +70,10 @@ export default function CameraCapture({
   // missing as a result, making employee registration feel unreliable
   // compared to the identical self-registration flow.
   defaultFacing = 'front',
+  // Whose face this is: 'self' when the signed-in person registers their
+  // own face, 'other' when an admin registers an employee/manager/partner.
+  // Defaults from the camera choice, which already encodes the same thing.
+  consentSubject = defaultFacing === 'front' ? 'self' : 'other',
 }) {
   const { colors } = useTheme();
   const styles = useStyles(colors);
@@ -80,6 +85,10 @@ export default function CameraCapture({
   const [liveDetected, setLiveDetected] = useState(false);
   const [faceOutside, setFaceOutside] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
+  // Face data is sensitive personal data (DPDP Act 2023): no camera until
+  // consent is given on this screen. The save services stamp face_consent_at.
+  const [consentGiven, setConsentGiven] = useState(false);
+  const [consentChecked, setConsentChecked] = useState(false);
   const cameraRef = useRef(null);
   const liveScanningRef = useRef(false);
   // Bumped on every capture and every new instruction, so a live-scan result
@@ -103,7 +112,7 @@ export default function CameraCapture({
   // turns green the moment a face is detected, before the user taps
   // capture — instead of only finding out after the fact that it failed.
   useEffect(() => {
-    if (!permission?.granted || !cameraReady || processing) return;
+    if (!consentGiven || !permission?.granted || !cameraReady || processing) return;
 
     const timer = setInterval(async () => {
       if (liveScanningRef.current || capturingRef.current || processing || !cameraRef.current) return;
@@ -128,7 +137,7 @@ export default function CameraCapture({
     }, LIVE_SCAN_INTERVAL_MS);
 
     return () => clearInterval(timer);
-  }, [permission?.granted, cameraReady, processing]);
+  }, [consentGiven, permission?.granted, cameraReady, processing]);
 
   function resetLiveDetection() {
     generationRef.current += 1;
@@ -197,6 +206,46 @@ export default function CameraCapture({
     }, AUTO_CAPTURE_HOLD_MS);
     return () => clearTimeout(timer);
   }, [liveDetected, processing, cameraReady, handleCapture]);
+
+  if (!consentGiven) {
+    const consentText =
+      consentSubject === 'self'
+        ? 'I agree that Hazri may store my face photo and face data to mark my attendance and verify my identity. It is used only by my company for attendance and is deleted when my account is removed.'
+        : 'I have told this person that Hazri will store their face photo and face data to mark attendance and verify identity, and they have agreed. It is used only by this company for attendance and is deleted when they are removed.';
+    return (
+      <View style={styles.container}>
+        <ScrollView contentContainerStyle={styles.consentWrap}>
+          <MaterialCommunityIcons name="shield-account-outline" size={44} color={colors.accent} />
+          <Text style={styles.consentTitle}>Face data consent</Text>
+          <Text style={styles.consentBody}>
+            Hazri saves a photo and a face template (numbers that describe the face) to recognise this person at
+            check-in. Face matching may use Amazon Web Services. Nobody outside the company can see the photo.
+          </Text>
+          <TouchableOpacity style={styles.consentRow} onPress={() => setConsentChecked((v) => !v)} activeOpacity={0.8}>
+            <MaterialCommunityIcons
+              name={consentChecked ? 'checkbox-marked' : 'checkbox-blank-outline'}
+              size={24}
+              color={consentChecked ? colors.accent : colors.textSecondary}
+            />
+            <Text style={styles.consentCheckText}>{consentText}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => Linking.openURL(PRIVACY_POLICY_URL)}>
+            <Text style={styles.consentLink}>Read the privacy policy</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.permissionButton, styles.consentButton, !consentChecked && styles.disabled]}
+            onPress={() => setConsentGiven(true)}
+            disabled={!consentChecked}
+          >
+            <Text style={styles.permissionButtonText}>Agree and continue</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.cancelLink} onPress={onCancel}>
+            <Text style={styles.cancelLinkText}>Cancel</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+    );
+  }
 
   if (!permission) {
     return (
@@ -402,6 +451,52 @@ function useStyles(colors) {
     },
     disabled: {
       opacity: 0.5,
+    },
+    consentWrap: {
+      flexGrow: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 24,
+    },
+    consentTitle: {
+      marginTop: 12,
+      fontFamily: 'Sora_700Bold',
+      fontSize: 20,
+      color: colors.textPrimary,
+      textAlign: 'center',
+    },
+    consentBody: {
+      marginTop: 10,
+      fontFamily: 'Inter_400Regular',
+      fontSize: 14,
+      lineHeight: 20,
+      color: colors.textSecondary,
+      textAlign: 'center',
+    },
+    consentRow: {
+      marginTop: 20,
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 10,
+    },
+    consentCheckText: {
+      flex: 1,
+      fontFamily: 'Inter_400Regular',
+      fontSize: 14,
+      lineHeight: 20,
+      color: colors.textPrimary,
+    },
+    consentLink: {
+      marginTop: 16,
+      fontFamily: 'Inter_600SemiBold',
+      fontSize: 14,
+      color: colors.accent,
+      textDecorationLine: 'underline',
+    },
+    consentButton: {
+      marginTop: 24,
+      alignSelf: 'stretch',
+      alignItems: 'center',
     },
   });
 }

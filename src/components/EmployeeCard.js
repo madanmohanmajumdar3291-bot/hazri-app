@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
+import { useEmployeePhotoUrl } from '../hooks/useEmployeePhotoUrl';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { colorForId } from '../constants/designTokens';
@@ -24,13 +25,14 @@ export function getInitials(name) {
 
 export default function EmployeeCard({ employee, branchName, branchColor, departmentName, departmentColor, onPress, onLongPress }) {
   const { colors } = useTheme();
+  const photoUri = useEmployeePhotoUrl(employee.photo_url);
   const styles = useMemo(() => createStyles(colors), [colors]);
   const faceColor = colorForId(employee.id) || getAvatarColor(employee.name);
 
   return (
     <TouchableOpacity style={styles.card} onPress={onPress} onLongPress={onLongPress} activeOpacity={0.8}>
-      {employee.photo_url ? (
-        <Image source={{ uri: employee.photo_url }} style={styles.avatar} />
+      {photoUri ? (
+        <Image source={{ uri: photoUri }} style={styles.avatar} />
       ) : employee.face_registered ? (
         <View style={[styles.avatar, styles.faceAvatar, { backgroundColor: faceColor, borderColor: faceColor }]}>
           <MaterialCommunityIcons name="account" size={26} color="rgba(255,255,255,0.9)" />

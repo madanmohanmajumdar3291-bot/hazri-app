@@ -59,6 +59,8 @@ export async function saveManagerFace(managerId, embedding, photoUri, allEmbeddi
       face_embeddings: allEmbeddings ?? null,
       face_registered: true,
       face_registered_at: new Date().toISOString(),
+      // Capture is only reachable after the consent step in CameraCapture.
+      face_consent_at: new Date().toISOString(),
     })
     .eq('id', managerId)
     .select()
@@ -77,6 +79,9 @@ export async function saveManagerFace(managerId, embedding, photoUri, allEmbeddi
         face_embeddings: allEmbeddings ?? null,
         face_registered: true,
         face_registered_at: new Date().toISOString(),
+        face_consent_at: new Date().toISOString(),
+      // Capture is only reachable after the consent step in CameraCapture.
+      face_consent_at: new Date().toISOString(),
       })
       .eq('id', data.linked_employee_id);
     // Surfaced (not swallowed) — if this silently fails (e.g. RLS denies

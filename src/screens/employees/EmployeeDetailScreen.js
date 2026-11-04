@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Image } from 'react-native';
+import { useEmployeePhotoUrl } from '../../hooks/useEmployeePhotoUrl';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import Toast from 'react-native-toast-message';
@@ -26,6 +27,7 @@ export default function EmployeeDetailScreen({ route, navigation }) {
   // Owner/Admin (who can also access Payroll) see or edit it here.
   const canSeeSalary = userData?.role === 'owner' || userData?.role === 'partner_edit';
   const [employee, setEmployee] = useState(null);
+  const photoUri = useEmployeePhotoUrl(employee?.photo_url);
   const [shifts, setShifts] = useState([]);
   const [sites, setSites] = useState([]);
   const [departments, setDepartments] = useState([]);
@@ -187,8 +189,8 @@ export default function EmployeeDetailScreen({ route, navigation }) {
         )}
       </View>
 
-      {employee.photo_url ? (
-        <Image source={{ uri: employee.photo_url }} style={styles.avatar} />
+      {photoUri ? (
+        <Image source={{ uri: photoUri }} style={styles.avatar} />
       ) : (
         <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
           <Text style={styles.avatarText}>{getInitials(employee.name)}</Text>

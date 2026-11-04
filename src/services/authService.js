@@ -5,24 +5,49 @@ import { supabase } from './supabase';
 import { ROLES } from '../constants/config';
 import { indexFaceInCloud, isCloudFaceAvailable } from './cloudFaceService';
 
-async function resolveEmailForPhone(phone) {
-  const { data, error } = await supabase.rpc('get_email_for_phone', { p_phone: phone });
-  if (error) throw error;
-  if (!data) throw { message: 'No account found with this phone number.' };
-  return data;
-}
-
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_PATTERN = /^[6-9]\d{9}$/;
 
 // Login (and password reset) accept EITHER a phone number or an email
-// address — managers/partners only ever have an email (no phone-based
-// account lookup previously existed for them), so both paths are supported.
-async function resolveEmailForIdentifier(identifier) {
+// address — managers/partners only ever have an email. Phone numbers are
+// resolved server-side by the phone-login edge function, so the app never
+// sees (or lets anyone look up) the email behind a phone number.
+function parseIdentifier(identifier) {
   const trimmed = identifier.trim();
-  if (EMAIL_PATTERN.test(trimmed)) return trimmed.toLowerCase();
-  if (PHONE_PATTERN.test(trimmed)) return resolveEmailForPhone(trimmed);
+  if (EMAIL_PATTERN.test(trimmed)) return { email: trimmed.toLowerCase() };
+  if (PHONE_PATTERN.test(trimmed)) return { phone: trimmed };
   throw { message: 'Enter a valid email address or 10-digit phone number.' };
+}
+
+async function invokePhoneLogin(body) {
+  const { data, error } = await supabase.functions.invoke('phone-login', { body });
+  if (error) {
+    let message = 'Could not reach the server. Please try again.';
+    try {
+      const errBody = await error.context.json();
+      if (errBody?.error) message = errBody.error;
+    } catch (_e) {
+      // keep the generic message
+    }
+    throw { message };
+  }
+  return data;
+}
+
+async function signInWithIdentifier(identifier, password) {
+  const { email, phone } = parseIdentifier(identifier);
+  if (email) {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    return data.user;
+  }
+  const tokens = await invokePhoneLogin({ action: 'sign-in', phone, password });
+  const { data, error } = await supabase.auth.setSession({
+    access_token: tokens.access_token,
+    refresh_token: tokens.refresh_token,
+  });
+  if (error) throw error;
+  return data.user;
 }
 
 // Runs entirely server-side (service role) via the signup-owner edge
@@ -64,11 +89,9 @@ export async function signupOwner({ fullName, email, phone, companyName, company
 }
 
 export async function loginOwner({ identifier, password }) {
-  const email = await resolveEmailForIdentifier(identifier);
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) throw error;
+  const user = await signInWithIdentifier(identifier, password);
 
-  const uid = data.user.id;
+  const uid = user.id;
   const userData = await fetchUserDoc(uid);
 
   if (!userData) {
@@ -111,6 +134,8 @@ export async function saveFaceEmbedding(uid, embedding, photoUri, allEmbeddings)
       face_embeddings: allEmbeddings ?? null,
       face_registered: true,
       face_registered_at: new Date().toISOString(),
+      // Capture is only reachable after the consent step in CameraCapture.
+      face_consent_at: new Date().toISOString(),
     })
     .eq('id', uid)
     .select()
@@ -147,12 +172,17 @@ export async function incrementFailedFaceAttempts(uid, count) {
 }
 
 export async function requestPasswordReset(identifier) {
-  const email = await resolveEmailForIdentifier(identifier);
+  const { email, phone } = parseIdentifier(identifier);
   // Native had no redirect URL at all — there was no app deep-link scheme
   // registered, so the reset email had nowhere valid to send the user back
   // into the app; tapping the link just opened Supabase's default page.
   const redirectTo =
     Platform.OS === 'web' ? `${window.location.origin}/reset-password` : Linking.createURL('reset-password');
+  if (phone) {
+    // The server sends the email to the account's address without revealing it.
+    await invokePhoneLogin({ action: 'reset', phone, redirectTo });
+    return null;
+  }
   const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
   if (error) throw error;
   return email;

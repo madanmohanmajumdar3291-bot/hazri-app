@@ -6,6 +6,31 @@ import { decode } from 'base64-arraybuffer';
 import { supabase } from './supabase';
 import { indexFaceInCloud, isCloudFaceAvailable } from './cloudFaceService';
 
+const PHOTO_PATH_PREFIX = 'employee-photos/';
+const PUBLIC_PHOTO_MARKER = '/object/public/employee-photos/';
+const SIGNED_URL_TTL_S = 60 * 60;
+const signedUrlCache = new Map();
+
+// photo_url holds either "employee-photos/<id>/photo.jpg?t=…" or, for photos
+// saved before the bucket went private, a full public URL. Both resolve to
+// the object path, signed for an hour and cached until shortly before then.
+export async function getEmployeePhotoUrl(photoUrl) {
+  if (!photoUrl) return null;
+  let rest = null;
+  if (photoUrl.startsWith(PHOTO_PATH_PREFIX)) rest = photoUrl.slice(PHOTO_PATH_PREFIX.length);
+  else if (photoUrl.includes(PUBLIC_PHOTO_MARKER)) rest = photoUrl.split(PUBLIC_PHOTO_MARKER)[1];
+  if (!rest) return photoUrl;
+  const path = rest.split('?')[0];
+
+  const cached = signedUrlCache.get(photoUrl);
+  if (cached && cached.expiresAt > Date.now()) return cached.url;
+
+  const { data, error } = await supabase.storage.from('employee-photos').createSignedUrl(path, SIGNED_URL_TTL_S);
+  if (error || !data?.signedUrl) return null;
+  signedUrlCache.set(photoUrl, { url: data.signedUrl, expiresAt: Date.now() + (SIGNED_URL_TTL_S - 300) * 1000 });
+  return data.signedUrl;
+}
+
 export const FREE_EMPLOYEE_LIMIT = 50;
 
 export async function createEmployee({
@@ -63,9 +88,11 @@ async function uploadEmployeePhoto(employeeId, localUri) {
       .upload(path, decode(base64), { upsert: true, contentType });
     if (uploadError) throw uploadError;
 
-    const { data: publicUrlData } = supabase.storage.from('employee-photos').getPublicUrl(path);
-    // Cache-bust so a re-registered photo shows immediately instead of a stale cached image.
-    return `${publicUrlData.publicUrl}?t=${Date.now()}`;
+    // The bucket is private (face photos are biometric data), so store the
+    // object path, not a public URL. Screens turn it into a short-lived
+    // signed URL with getEmployeePhotoUrl(). The ?t= suffix cache-busts a
+    // re-registered photo.
+    return `${PHOTO_PATH_PREFIX}${path}?t=${Date.now()}`;
   } catch (_error) {
     return null;
   }
@@ -83,6 +110,8 @@ export async function saveEmployeeFace(employeeId, embedding, photoUri, allEmbed
       face_embeddings: allEmbeddings ?? null,
       face_registered: true,
       face_registered_at: new Date().toISOString(),
+      // Capture is only reachable after the consent step in CameraCapture.
+      face_consent_at: new Date().toISOString(),
       ...(photo_url ? { photo_url } : {}),
     })
     .eq('id', employeeId)
@@ -153,12 +182,19 @@ export async function removeEmployee(employeeId, companyId) {
     .eq('id', employeeId)
     .maybeSingle();
 
+  // Photo first: the storage rules only allow deleting a photo while its
+  // employee row still exists in the caller's company. Best-effort, so it
+  // never blocks removing the employee.
+  await supabase.storage
+    .from('employee-photos')
+    .remove([`${employeeId}/photo.jpg`, `${employeeId}/photo.png`])
+    .catch(() => {});
+
   const { error: deleteError } = await supabase.from('employees').delete().eq('id', employeeId);
   if (deleteError) throw deleteError;
 
-  // Best-effort cleanup — never let either of these block the delete that
-  // already succeeded above.
-  supabase.storage.from('employee-photos').remove([`${employeeId}/photo.jpg`, `${employeeId}/photo.png`]).catch(() => {});
+  // Best-effort cleanup — never let this block the delete that already
+  // succeeded above.
   if (employee?.aws_face_id) {
     supabase.functions.invoke('delete-face', { body: { faceId: employee.aws_face_id } }).catch(() => {});
   }

@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, Linking } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -11,6 +11,7 @@ import PasswordConfirmModal from '../../components/PasswordConfirmModal';
 import Button from '../../components/Button';
 import { getCompany } from '../../services/companyService';
 import { reauthenticateOwner, logoutOwner } from '../../services/authService';
+import { PRIVACY_POLICY_URL } from '../../constants/config';
 
 const THEME_OPTIONS = [
   { key: 'light', label: 'Light', icon: 'white-balance-sunny' },
@@ -74,6 +75,7 @@ export default function SettingsScreen({ navigation }) {
     ...(isOwner
       ? [{ key: 'partners', label: 'Admin & User Access', desc: 'Give another account access to your data' }]
       : []),
+    { key: 'privacy', label: 'Privacy Policy', desc: 'How Hazri handles face, location and attendance data' },
   ];
 
   function handlePress(key) {
@@ -84,6 +86,7 @@ export default function SettingsScreen({ navigation }) {
     else if (key === 'google-drive') navigation.navigate('GoogleDriveBackup');
     else if (key === 'security') navigation.navigate('AccountSecurity');
     else if (key === 'partners') navigation.navigate('PartnersList');
+    else if (key === 'privacy') Linking.openURL(PRIVACY_POLICY_URL);
   }
 
   function handleFacePress() {

@@ -10,3 +10,6 @@ export const ROLES = {
 
 export const SPLASH_DURATION_MS = 2000;
 
+
+// Public privacy policy (also needed for the Play Store listing).
+export const PRIVACY_POLICY_URL = 'https://github.com/madanmohanmajumdar3291-bot/hazri-app/blob/main/PRIVACY.md';
