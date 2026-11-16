@@ -2,6 +2,8 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import * as Linking from 'expo-linking';
 import { supabase } from '../services/supabase';
 import { fetchUserDoc, saveFaceEmbedding as saveFaceEmbeddingRequest } from '../services/authService';
+import { requeueFailedForCompany } from '../services/syncService';
+import { reportError } from '../services/errorReporting';
 
 // Supabase's reset-password link redirects back to our app URL with the
 // recovery tokens in the URL's hash fragment (#access_token=...&type=recovery)
@@ -66,7 +68,9 @@ export function AuthProvider({ children }) {
         }
 
         setFirebaseUser(sessionUser);
-        setUserData(data);
+        // Keep what was already loaded if this refresh failed.
+        if (data || !fetchFailed) setUserData(data);
+        if (data?.company_id) requeueFailedForCompany(data.company_id).catch(() => {});
       } else {
         setFirebaseUser(null);
         setUserData(null);
@@ -75,23 +79,41 @@ export function AuthProvider({ children }) {
       setInitializing(false);
     }
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      loadUser(session?.user ?? null);
-    });
+    // A storage or parse failure here used to leave the splash screen up
+    // forever (initializing never cleared). Treat it as signed out instead.
+    supabase.auth
+      .getSession()
+      .then(({ data }) => loadUser(data?.session?.user ?? null))
+      .catch((error) => {
+        reportError(error, { context: { area: 'getSession' } });
+        loadUser(null);
+      });
 
     // Clicking the "reset password" email link signs the user into a
     // temporary recovery session — this event tells us to route to the
     // reset-password screen instead of straight into the app.
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'PASSWORD_RECOVERY') setPasswordRecovery(true);
-      loadUser(session?.user ?? null);
+      // Token refreshes don't change who is signed in; re-fetching the
+      // account on each one is a wasted request every hour.
+      if (event === 'TOKEN_REFRESHED') return;
+      // Deferred: supabase-js holds its auth lock while running this
+      // callback, and loadUser makes requests that need the same lock.
+      setTimeout(() => {
+        loadUser(session?.user ?? null).catch((error) => {
+          reportError(error, { context: { area: 'loadUser' } });
+          setInitializing(false);
+        });
+      }, 0);
     });
 
     // Native (no browser) needs the incoming deep link parsed by hand —
     // setSession() below then triggers the same onAuthStateChange listener
     // above that already routes into the reset-password screen on web.
-    Linking.getInitialURL().then(handleRecoveryUrl);
-    const urlListener = Linking.addEventListener('url', ({ url }) => handleRecoveryUrl(url));
+    Linking.getInitialURL().then(handleRecoveryUrl).catch(() => {});
+    const urlListener = Linking.addEventListener('url', ({ url }) => {
+      handleRecoveryUrl(url).catch(() => {});
+    });
 
     return () => {
       listener.subscription.unsubscribe();

@@ -142,7 +142,9 @@ export default function MenuScreen({ navigation }) {
     } else if (item.key === 'view-employees') {
       navigation.navigate('EmployeesList');
     } else if (item.key === 'kiosk-mode') {
-      navigation.navigate('KioskMode');
+      // Reset rather than push: with Menu still underneath, Android Back
+      // from the kiosk returned straight to the unlocked Menu.
+      navigation.reset({ index: 0, routes: [{ name: 'KioskMode' }] });
     } else if (item.key === 'manual-attendance') {
       navigation.navigate('ManualAttendance');
     } else if (item.key === 'managers') {

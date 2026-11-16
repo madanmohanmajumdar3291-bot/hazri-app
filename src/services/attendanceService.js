@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 import { supabase } from './supabase';
 import { cosineSimilarity, SIMILARITY_THRESHOLD, euclideanDistance, EUCLIDEAN_MATCH_THRESHOLD } from '../utils/faceUtils';
-import { getDb, generateLocalId } from './db';
+import { getDb, generateLocalId, generateTxnId } from './db';
 import { isOnline, syncPendingAttendance } from './syncService';
 import { getCurrentPosition, getCompanySites, resolveGeofence, recordLocationPing } from './locationService';
 import { hasLocationConsent, startFieldTracking, stopFieldTracking } from './fieldTrackingService';
@@ -38,32 +38,37 @@ export async function getCompanyEmployees(companyId) {
         .eq('face_registered', true);
       if (error) throw error;
 
-      for (const employee of data) {
-        await db.runAsync(
-          `INSERT INTO employees_cache (id, name, face_embedding, face_embeddings, work_mode, location_consent_given_at) VALUES (?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET name = excluded.name, face_embedding = excluded.face_embedding, face_embeddings = excluded.face_embeddings, work_mode = excluded.work_mode, location_consent_given_at = excluded.location_consent_given_at`,
-          [
-            employee.id,
-            employee.name,
-            JSON.stringify(employee.face_embedding),
-            JSON.stringify(employee.face_embeddings ?? null),
-            employee.work_mode ?? 'office',
-            employee.location_consent_given_at ?? null,
-          ]
-        );
-      }
+      // One transaction for the whole roster: faster than one implicit
+      // transaction per row, and the cache is never left half-updated.
+      await db.withTransactionAsync(async () => {
+        for (const employee of data) {
+          await db.runAsync(
+            `INSERT INTO employees_cache (id, name, face_embedding, face_embeddings, work_mode, location_consent_given_at, company_id) VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name, face_embedding = excluded.face_embedding, face_embeddings = excluded.face_embeddings, work_mode = excluded.work_mode, location_consent_given_at = excluded.location_consent_given_at, company_id = excluded.company_id`,
+            [
+              employee.id,
+              employee.name,
+              JSON.stringify(employee.face_embedding),
+              JSON.stringify(employee.face_embeddings ?? null),
+              employee.work_mode ?? 'office',
+              employee.location_consent_given_at ?? null,
+              companyId,
+            ]
+          );
+        }
 
-      // Prune anyone no longer in the live roster (removed, deactivated, or
-      // their face un-registered) — without this, a removed employee's face
-      // would keep matching forever on any device that had ever cached them,
-      // even while fully offline.
-      const currentIds = data.map((employee) => employee.id);
-      if (currentIds.length > 0) {
-        const placeholders = currentIds.map(() => '?').join(',');
-        await db.runAsync(`DELETE FROM employees_cache WHERE id NOT IN (${placeholders})`, currentIds);
-      } else {
-        await db.runAsync(`DELETE FROM employees_cache`);
-      }
+        // Prune anyone no longer in the live roster (removed, deactivated, or
+        // their face un-registered) and anything cached for another company —
+        // a removed employee's face must not keep matching offline, and one
+        // company's faces must never be matched for another.
+        const currentIds = data.map((employee) => employee.id);
+        if (currentIds.length > 0) {
+          const placeholders = currentIds.map(() => '?').join(',');
+          await db.runAsync(`DELETE FROM employees_cache WHERE id NOT IN (${placeholders})`, currentIds);
+        } else {
+          await db.runAsync(`DELETE FROM employees_cache`);
+        }
+      });
 
       return data;
     }
@@ -72,7 +77,8 @@ export async function getCompanyEmployees(companyId) {
   }
 
   const cached = await db.getAllAsync(
-    `SELECT id, name, face_embedding, face_embeddings, work_mode, location_consent_given_at FROM employees_cache`
+    `SELECT id, name, face_embedding, face_embeddings, work_mode, location_consent_given_at FROM employees_cache WHERE company_id = ?`,
+    [companyId]
   );
   return cached.map((row) => ({
     id: row.id,
@@ -369,10 +375,11 @@ export async function recordAttendance(employee, companyId, { isKiosk = false } 
     const now = new Date().toISOString();
     const localId = generateLocalId();
     await db.runAsync(
-      `INSERT INTO attendance_offline (local_id, employee_id, employee_name, company_id, check_in, date, marked_by, site_id, check_in_lat, check_in_lng, is_outside_geofence, sync_status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'face', ?, ?, ?, ?, 'pending', ?)`,
+      `INSERT INTO attendance_offline (local_id, client_txn_id, employee_id, employee_name, company_id, check_in, date, marked_by, site_id, check_in_lat, check_in_lng, is_outside_geofence, sync_status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'face', ?, ?, ?, ?, 'pending', ?)`,
       [
         localId,
+        generateTxnId(),
         employee.id,
         employee.name,
         companyId,

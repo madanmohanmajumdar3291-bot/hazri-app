@@ -4,6 +4,7 @@ import * as Linking from 'expo-linking';
 import { supabase } from './supabase';
 import { ROLES } from '../constants/config';
 import { indexFaceInCloud, isCloudFaceAvailable } from './cloudFaceService';
+import { requeueFailedForCompany } from './syncService';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_PATTERN = /^[6-9]\d{9}$/;
@@ -107,13 +108,28 @@ export async function loginOwner({ identifier, password }) {
 
   await AsyncStorage.setItem('uid', uid);
   await AsyncStorage.setItem('companyId', userData.company_id);
+  requeueFailedForCompany(userData.company_id).catch(() => {});
 
   return userData;
 }
 
 export async function logoutOwner() {
-  await supabase.auth.signOut();
+  // Local sign-out still succeeds when the network is down; the server-side
+  // refresh token is revoked when reachable.
+  await supabase.auth.signOut().catch(() => supabase.auth.signOut({ scope: 'local' }));
   await AsyncStorage.multiRemove(['uid', 'companyId']);
+  // Every employee's face template is cached on the phone for offline
+  // matching. It belongs to this company only, so it goes with the session.
+  // Queued attendance is kept: it uploads on the next sign-in to its company.
+  if (Platform.OS !== 'web') {
+    try {
+      const { getDb } = require('./db');
+      const db = await getDb();
+      await db.runAsync(`DELETE FROM employees_cache`);
+    } catch (_error) {
+      // Cache is also filtered by company on read, so a failure here is not a leak.
+    }
+  }
 }
 
 export async function fetchUserDoc(uid) {

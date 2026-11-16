@@ -1,5 +1,24 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { clientIp, isLocked, recordFailure } from "../_shared/throttle.ts";
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_PATTERN = /^[6-9]\d{9}$/;
+// Unauthenticated endpoint: at most 5 new companies per IP per hour.
+const SIGNUP_RULE = { maxFailures: 5, windowMs: 60 * 60 * 1000, lockMs: 60 * 60 * 1000 };
+
+function validate(b: Record<string, unknown>): string | null {
+  const text = (v: unknown, max: number) => typeof v === "string" && v.trim().length > 0 && v.length <= max;
+  if (!text(b.fullName, 100)) return "Enter your full name.";
+  if (!text(b.companyName, 120)) return "Enter your company name.";
+  if (b.companyAddress !== undefined && b.companyAddress !== null && (typeof b.companyAddress !== "string" || b.companyAddress.length > 300)) {
+    return "Company address is too long.";
+  }
+  if (typeof b.email !== "string" || !EMAIL_PATTERN.test(b.email.trim()) || b.email.length > 254) return "Enter a valid email address.";
+  if (typeof b.phone !== "string" || !PHONE_PATTERN.test(b.phone.trim())) return "Enter a valid 10-digit mobile number.";
+  if (typeof b.password !== "string" || b.password.length < 8 || b.password.length > 72) return "Password must be 8 to 72 characters.";
+  return null;
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -27,12 +46,22 @@ Deno.serve(async (req: Request) => {
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const admin = createClient(supabaseUrl, serviceRoleKey);
 
-    const body = await req.json();
-    const { fullName, email, phone, companyName, companyAddress, password } = body ?? {};
-
-    if (!fullName || !email || !phone || !companyName || !password) {
-      return json({ error: "Missing required fields" }, 400);
+    const ipKey = `signup:${clientIp(req)}`;
+    if (await isLocked(admin, ipKey)) {
+      return json({ error: "Too many sign-ups from this network. Please try again later." }, 429);
     }
+
+    const body = await req.json().catch(() => null);
+    const invalid = validate(body ?? {});
+    if (invalid) return json({ error: invalid }, 400);
+    const fullName = body.fullName.trim();
+    const email = body.email.trim().toLowerCase();
+    const phone = body.phone.trim();
+    const companyName = body.companyName.trim();
+    const companyAddress = typeof body.companyAddress === "string" ? body.companyAddress.trim() : null;
+    const password = body.password;
+    // Counted on every attempt that reaches account creation, successful or not.
+    await recordFailure(admin, ipKey, SIGNUP_RULE).catch(() => {});
 
     // Runs entirely with the service role, so no RLS timing races (the
     // previous client-side flow could create the auth account, then hit an
@@ -85,6 +114,7 @@ Deno.serve(async (req: Request) => {
 
     return json({ user: userRow });
   } catch (err) {
-    return json({ error: String(err) }, 500);
+    console.error("signup-owner:", err);
+    return json({ error: "Could not create the account. Please try again." }, 500);
   }
 });

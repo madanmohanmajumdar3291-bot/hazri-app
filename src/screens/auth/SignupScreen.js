@@ -58,7 +58,7 @@ export default function SignupScreen({ navigation }) {
     >
       <ScrollView contentContainerStyle={styles.container}>
         <Text style={styles.title}>Create Your Account</Text>
-        <Text style={styles.subtitle}>Set up your business on FaceMark</Text>
+        <Text style={styles.subtitle}>Set up your business on Hazri</Text>
 
         <Controller
           control={control}

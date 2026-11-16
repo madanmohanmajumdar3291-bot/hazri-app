@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { clearFailures, clientIp, isLocked, recordFailure } from "../_shared/throttle.ts";
 
 // Login and password reset by phone number, done server-side so the app
 // never needs an anonymous "phone -> email" lookup. The old public RPC
@@ -17,6 +18,14 @@ const corsHeaders = {
 };
 const PHONE_PATTERN = /^[6-9]\d{9}$/;
 const GENERIC_LOGIN_ERROR = "Incorrect phone number or password.";
+const LOCKED_ERROR = "Too many attempts. Please wait 15 minutes and try again.";
+// Per phone number: 5 wrong passwords in 15 minutes locks that number for 15
+// minutes. Per client IP: 30 failures in 15 minutes. Supabase Auth's own
+// per-IP limit sees every phone login as coming from this function's IP, so
+// without this one attacker could throttle all users, and no single account
+// was ever locked.
+const PHONE_RULE = { maxFailures: 5, windowMs: 15 * 60 * 1000, lockMs: 15 * 60 * 1000 };
+const IP_RULE = { maxFailures: 30, windowMs: 15 * 60 * 1000, lockMs: 15 * 60 * 1000 };
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -56,12 +65,26 @@ Deno.serve(async (req: Request) => {
   }
 
   if (body.action === "sign-in") {
-    if (!email || !body.password) return json({ error: GENERIC_LOGIN_ERROR }, 401);
+    const phoneKey = `phone:${phone}`;
+    const ipKey = `ip:${clientIp(req)}`;
+    if ((await isLocked(admin, phoneKey)) || (await isLocked(admin, ipKey))) {
+      return json({ error: LOCKED_ERROR }, 429);
+    }
+    if (!email || !body.password) {
+      // Unknown numbers count too, so the lock can't be used to tell which
+      // numbers have accounts.
+      await recordFailure(admin, phoneKey, PHONE_RULE).catch(() => {});
+      await recordFailure(admin, ipKey, IP_RULE).catch(() => {});
+      return json({ error: GENERIC_LOGIN_ERROR }, 401);
+    }
     const { data, error } = await publicClient.auth.signInWithPassword({ email, password: body.password });
     if (error || !data.session) {
-      const status = error?.status === 429 ? 429 : 401;
-      return json({ error: status === 429 ? "Too many attempts. Please wait a few minutes." : GENERIC_LOGIN_ERROR }, status);
+      if (error?.status === 429) return json({ error: "Too many attempts. Please wait a few minutes." }, 429);
+      await recordFailure(admin, phoneKey, PHONE_RULE).catch(() => {});
+      await recordFailure(admin, ipKey, IP_RULE).catch(() => {});
+      return json({ error: GENERIC_LOGIN_ERROR }, 401);
     }
+    await clearFailures(admin, phoneKey).catch(() => {});
     return json({ access_token: data.session.access_token, refresh_token: data.session.refresh_token });
   }
 

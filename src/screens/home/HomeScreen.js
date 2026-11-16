@@ -117,10 +117,12 @@ export default function HomeScreen({ navigation }) {
     try {
       const count = await getEmployeeCount(userData.company_id);
       if (count >= FREE_EMPLOYEE_LIMIT) {
-        navigation.navigate('EmployeesList');
+        navigation.navigate('MenuUnlock', { destination: 'EmployeesList' });
         return;
       }
-      navigation.navigate('AddEmployee');
+      // Home is the shared walk-up scanner, so anything that opens company
+      // data goes through the same face/password check as the Menu.
+      navigation.navigate('MenuUnlock', { destination: 'AddEmployee' });
     } catch (error) {
       Toast.show({ type: 'error', text1: 'Could not check employee limit', text2: error.message });
     }
@@ -158,7 +160,7 @@ export default function HomeScreen({ navigation }) {
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.iconButton}
-          onPress={() => navigation.navigate(canEditSettings ? 'Settings' : 'Profile')}
+          onPress={() => navigation.navigate('MenuUnlock', { destination: canEditSettings ? 'Settings' : 'Profile' })}
         >
           <MaterialCommunityIcons name="cog-outline" size={20} color={colors.textPrimary} />
         </TouchableOpacity>
