@@ -3,11 +3,11 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { buildAlertText } from "../_shared/alerts.ts";
 
 // Called every 15 minutes by pg_cron (see migrations/20261117b_error_alerts.sql).
-// Sends one WhatsApp message (CallMeBot) summarising crashes and attendance
-// that could not be synced. verify_jwt is off; the caller must send the
-// shared secret ALERT_CRON_SECRET in x-alert-secret instead.
-// Settings (shared secret, phone, CallMeBot key) are read from Supabase
-// Vault through get_alert_config(), which only the service role may call.
+// Sends one email (via Resend) summarising crashes and attendance that could
+// not be synced. verify_jwt is off; the caller must send the shared secret
+// in x-alert-secret instead. Settings (shared secret, recipient address,
+// Resend API key) are read from Supabase Vault through get_alert_config(),
+// which only the service role may call.
 const WINDOW_MINUTES = 15;
 
 Deno.serve(async (req: Request) => {
@@ -17,9 +17,9 @@ Deno.serve(async (req: Request) => {
   if (!secret || req.headers.get("x-alert-secret") !== secret) {
     return new Response("Forbidden", { status: 403 });
   }
-  const phone = config?.alert_whatsapp_phone;
-  const apikey = config?.alert_callmebot_apikey;
-  if (!phone || !apikey || String(apikey).startsWith("__")) {
+  const to = config?.alert_email;
+  const apikey = config?.alert_resend_apikey;
+  if (!to || !apikey || String(apikey).startsWith("__") || String(to).startsWith("__")) {
     return Response.json({ sent: false, reason: "not configured" });
   }
   const since = new Date(Date.now() - WINDOW_MINUTES * 60 * 1000).toISOString();
@@ -36,9 +36,19 @@ Deno.serve(async (req: Request) => {
   const text = buildAlertText(data ?? [], WINDOW_MINUTES);
   if (!text) return Response.json({ sent: false, reason: "nothing critical" });
 
-  const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(phone)}` +
-    `&text=${encodeURIComponent(text)}&apikey=${encodeURIComponent(apikey)}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(20000) }).catch((e) => {
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apikey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      // Resend's shared test sender works without a verified domain, but only
+      // delivers to the address the Resend account was created with.
+      from: "Hazri Alerts <onboarding@resend.dev>",
+      to: [to],
+      subject: text.split("\n")[0],
+      text,
+    }),
+    signal: AbortSignal.timeout(20000),
+  }).catch((e) => {
     console.error("error-alerts send:", e?.message);
     return null;
   });

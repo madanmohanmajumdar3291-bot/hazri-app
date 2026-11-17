@@ -1,4 +1,4 @@
-// Builds the WhatsApp text for critical app errors. Pure, so it is unit
+// Builds the alert email text for critical app errors. Pure, so it is unit
 // tested. Rows come from public.client_errors, which the app scrubs before
 // sending (no tokens, emails, phone numbers or face data), and only short
 // fields are used here.

@@ -1,16 +1,16 @@
--- Critical-error alerts over WhatsApp (CallMeBot).
+-- Critical-error alerts by email (Resend).
 -- Every 15 minutes pg_cron calls the error-alerts edge function, which sends
--- one WhatsApp summary if any crash or unsyncable attendance was reported.
+-- one email summary if any crash or unsyncable attendance was reported.
 -- Settings live in Supabase Vault, never in the repo. Before running, replace:
 --   __ALERT_CRON_SECRET__   a long random string
---   __WHATSAPP_PHONE__      your number with country code, digits only (91...)
---   __CALLMEBOT_APIKEY__    the key CallMeBot sends you on WhatsApp
+--   __ALERT_EMAIL__         the address alerts go to (the one you signed up to Resend with)
+--   __RESEND_APIKEY__       your Resend API key (starts with re_)
 create extension if not exists pg_net with schema extensions;
 
-delete from vault.secrets where name in ('alert_cron_secret', 'alert_whatsapp_phone', 'alert_callmebot_apikey');
+delete from vault.secrets where name like 'alert\_%';
 select vault.create_secret('__ALERT_CRON_SECRET__', 'alert_cron_secret');
-select vault.create_secret('__WHATSAPP_PHONE__', 'alert_whatsapp_phone');
-select vault.create_secret('__CALLMEBOT_APIKEY__', 'alert_callmebot_apikey');
+select vault.create_secret('__ALERT_EMAIL__', 'alert_email');
+select vault.create_secret('__RESEND_APIKEY__', 'alert_resend_apikey');
 
 -- Read by the edge function with the service role only.
 create or replace function public.get_alert_config()
@@ -21,7 +21,7 @@ set search_path = public
 as $$
   select jsonb_object_agg(name, decrypted_secret)
   from vault.decrypted_secrets
-  where name in ('alert_cron_secret', 'alert_whatsapp_phone', 'alert_callmebot_apikey');
+  where name in ('alert_cron_secret', 'alert_email', 'alert_resend_apikey');
 $$;
 revoke execute on function public.get_alert_config() from public, anon, authenticated;
 grant execute on function public.get_alert_config() to service_role;
