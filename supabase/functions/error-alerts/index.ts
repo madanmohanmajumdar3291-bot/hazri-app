@@ -3,11 +3,12 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { buildAlertText } from "../_shared/alerts.ts";
 
 // Called every 15 minutes by pg_cron (see migrations/20261117b_error_alerts.sql).
-// Sends one email (via Resend) summarising crashes and attendance that could
-// not be synced. verify_jwt is off; the caller must send the shared secret
-// in x-alert-secret instead. Settings (shared secret, recipient address,
-// Resend API key) are read from Supabase Vault through get_alert_config(),
-// which only the service role may call.
+// Sends one email through the Hostinger Mail API (from the info@ mailbox)
+// summarising crashes and attendance that could not be synced. verify_jwt is
+// off; the caller must send the shared secret in x-alert-secret instead.
+// Settings (shared secret, recipient, mailbox id, Mail API token) are read
+// from Supabase Vault through get_alert_config(), which only the service role
+// may call. The token is scoped to that one mailbox.
 const WINDOW_MINUTES = 15;
 
 Deno.serve(async (req: Request) => {
@@ -18,8 +19,9 @@ Deno.serve(async (req: Request) => {
     return new Response("Forbidden", { status: 403 });
   }
   const to = config?.alert_email;
-  const apikey = config?.alert_resend_apikey;
-  if (!to || !apikey || String(apikey).startsWith("__") || String(to).startsWith("__")) {
+  const mailbox = config?.alert_mailbox_id;
+  const token = config?.alert_mail_token;
+  if (!to || !mailbox || !token || [to, mailbox, token].some((v) => String(v).startsWith("__"))) {
     return Response.json({ sent: false, reason: "not configured" });
   }
   const since = new Date(Date.now() - WINDOW_MINUTES * 60 * 1000).toISOString();
@@ -36,21 +38,20 @@ Deno.serve(async (req: Request) => {
   const text = buildAlertText(data ?? [], WINDOW_MINUTES);
   if (!text) return Response.json({ sent: false, reason: "nothing critical" });
 
-  const res = await fetch("https://api.resend.com/emails", {
+  const res = await fetch(`https://api.mail.hostinger.com/api/v1/mailboxes/${encodeURIComponent(mailbox)}/send`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${apikey}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      // Resend's shared test sender works without a verified domain, but only
-      // delivers to the address the Resend account was created with.
-      from: "Hazri Alerts <onboarding@resend.dev>",
       to: [to],
       subject: text.split("\n")[0],
       text,
+      displayName: "Hazri Alerts",
     }),
     signal: AbortSignal.timeout(20000),
   }).catch((e) => {
     console.error("error-alerts send:", e?.message);
     return null;
   });
+  if (res && !res.ok) console.error("error-alerts send status:", res.status, (await res.text()).slice(0, 300));
   return Response.json({ sent: Boolean(res?.ok), status: res?.status ?? null });
 });
