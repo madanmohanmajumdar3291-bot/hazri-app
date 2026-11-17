@@ -29,6 +29,24 @@ export default function KioskScreen({ navigation }) {
   const [cameraKey, setCameraKey] = useState(0);
   const [cameraReady, setCameraReady] = useState(false);
   const cameraRef = useRef(null);
+  const leavingRef = useRef(false);
+
+  // A kiosk is an unattended shared phone signed in as the owner. Leaving it
+  // by any route (the button, Android Back, a swipe) must go through the
+  // same face/password check as opening the Menu from Home.
+  const leaveKiosk = useCallback(() => {
+    leavingRef.current = true;
+    navigation.replace('MenuUnlock', { destination: 'Menu' });
+  }, [navigation]);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (event) => {
+      if (leavingRef.current) return;
+      event.preventDefault();
+      leaveKiosk();
+    });
+    return unsubscribe;
+  }, [navigation, leaveKiosk]);
 
   // See HomeScreen.js — Android can leave the camera preview black on
   // returning to this screen; remounting via key on focus fixes it.
@@ -76,7 +94,7 @@ export default function KioskScreen({ navigation }) {
       <View style={styles.center}>
         <Text style={styles.infoText}>Hazri needs camera access for kiosk mode.</Text>
         <Button title="Grant Camera Access" onPress={requestPermission} />
-        <TouchableOpacity onPress={() => navigation.replace('Menu')}>
+        <TouchableOpacity onPress={leaveKiosk}>
           <Text style={styles.backLink}>Back to Menu</Text>
         </TouchableOpacity>
       </View>
@@ -139,7 +157,7 @@ export default function KioskScreen({ navigation }) {
       </View>
 
       <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) + 24 }]}>
-        <TouchableOpacity style={styles.footerButton} onPress={() => navigation.replace('Menu')}>
+        <TouchableOpacity style={styles.footerButton} onPress={leaveKiosk}>
           <MaterialCommunityIcons name="view-grid-outline" size={20} color={colors.accent} />
           <Text style={styles.footerButtonText}>Back to Menu</Text>
         </TouchableOpacity>

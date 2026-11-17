@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 import { recordLocationPing } from './locationService';
 
@@ -14,9 +15,41 @@ const DISTANCE_INTERVAL_M = 200;
 let activeEmployeeId = null;
 let activeCompanyId = null;
 
+// Android runs this task in a fresh JS process when the app has been
+// backgrounded or killed, so module variables start out null there. Up to
+// v1.0.2 that meant every background ping was silently dropped. The tracked
+// employee is persisted and read back when memory is empty.
+const TRACKING_CONTEXT_KEY = 'hazri.fieldTracking.active';
+
+async function persistTrackingContext(employeeId, companyId) {
+  if (employeeId && companyId) {
+    await AsyncStorage.setItem(TRACKING_CONTEXT_KEY, JSON.stringify({ employeeId, companyId }));
+  } else {
+    await AsyncStorage.removeItem(TRACKING_CONTEXT_KEY);
+  }
+}
+
+export async function loadTrackingContext() {
+  if (activeEmployeeId && activeCompanyId) return { employeeId: activeEmployeeId, companyId: activeCompanyId };
+  try {
+    const raw = await AsyncStorage.getItem(TRACKING_CONTEXT_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (parsed?.employeeId && parsed?.companyId) {
+      activeEmployeeId = parsed.employeeId;
+      activeCompanyId = parsed.companyId;
+      return parsed;
+    }
+  } catch (_error) {
+    // Corrupt value: treat as not tracking.
+  }
+  return null;
+}
+
 if (Platform.OS !== 'web' && !TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
   TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
-    if (error || !data || !activeEmployeeId || !activeCompanyId) return;
+    if (error || !data) return;
+    await loadTrackingContext();
+    if (!activeEmployeeId || !activeCompanyId) return;
     const { locations } = data;
     const latest = locations?.[locations.length - 1];
     if (!latest) return;
@@ -50,6 +83,7 @@ export async function grantLocationConsent(employeeId) {
 
 export async function startFieldTracking(employeeId, companyId) {
   if (Platform.OS === 'web') return { started: false, reason: 'unsupported-on-web' };
+  await loadTrackingContext();
 
   // The background task is a single shared OS resource — if a shared
   // device (e.g. an office tablet used to check remote employees in
@@ -70,6 +104,7 @@ export async function startFieldTracking(employeeId, companyId) {
 
   activeEmployeeId = employeeId;
   activeCompanyId = companyId;
+  await persistTrackingContext(employeeId, companyId);
 
   const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch(() => false);
   if (!alreadyStarted) {
@@ -91,6 +126,7 @@ export async function startFieldTracking(employeeId, companyId) {
 
 export async function stopFieldTracking(employeeId) {
   if (Platform.OS === 'web') return;
+  await loadTrackingContext();
 
   // If the device is currently tracking a DIFFERENT employee, this
   // checkout must not tear down that shared session — just clear this
@@ -107,6 +143,7 @@ export async function stopFieldTracking(employeeId) {
   }
   activeEmployeeId = null;
   activeCompanyId = null;
+  await persistTrackingContext(null, null);
   if (employeeId) {
     await supabase.from('employees').update({ location_tracking_active: false }).eq('id', employeeId);
   }

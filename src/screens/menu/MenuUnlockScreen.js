@@ -13,7 +13,8 @@ import { useAuth } from '../../context/AuthContext';
 import { generateEmbedding, verifyFace, withTimeout } from '../../services/faceService';
 import { isCloudFaceAvailable, searchFaceInCloud } from '../../services/cloudFaceService';
 import { reauthenticateOwner, incrementFailedFaceAttempts } from '../../services/authService';
-import { MAX_FACE_ATTEMPTS, MAX_PIN_ATTEMPTS, PIN_LOCKOUT_MS } from '../../utils/faceUtils';
+import { MAX_FACE_ATTEMPTS, MAX_PIN_ATTEMPTS } from '../../utils/faceUtils';
+import { registerFailure, isLockedOut, loadLockout, saveLockout, clearLockout } from '../../utils/unlockLockout';
 
 // No blink/liveness wait here anymore — a phone's Face ID doesn't make you
 // wait for a blink either (it uses depth/IR sensing we don't have access
@@ -76,6 +77,20 @@ export default function MenuUnlockScreen({ route, navigation }) {
   const [verifying, setVerifying] = useState(false);
   const [liveHint, setLiveHint] = useState('Look at the camera to confirm it\'s really you');
   const noMatchAttemptsRef = useRef(0);
+
+  // Restore any password lockout from a previous visit to this screen.
+  useEffect(() => {
+    let cancelled = false;
+    loadLockout(firebaseUser?.id).then((state) => {
+      if (cancelled) return;
+      setPinAttempts(state.attempts);
+      setLockUntil(state.lockUntil);
+      if (isLockedOut(state)) setError('Too many incorrect attempts. Try again in 5 minutes.');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [firebaseUser?.id]);
 
   useEffect(() => {
     // Deliberately NOT gated on cameraReady — onCameraReady doesn't fire
@@ -213,20 +228,26 @@ export default function MenuUnlockScreen({ route, navigation }) {
   }
 
   async function handlePasswordConfirm() {
+    if (isLockedOut({ lockUntil })) {
+      setError('Too many incorrect attempts. Try again in 5 minutes.');
+      return;
+    }
     setVerifying(true);
     setError('');
     try {
       await reauthenticateOwner(firebaseUser.email, password);
       await incrementFailedFaceAttempts(firebaseUser.id, 0).catch(() => {});
+      await clearLockout(firebaseUser.id);
       navigation.replace(destination, destinationParams);
     } catch (e) {
-      const nextPinAttempts = pinAttempts + 1;
-      setPinAttempts(nextPinAttempts);
-      if (nextPinAttempts >= MAX_PIN_ATTEMPTS) {
-        setLockUntil(Date.now() + PIN_LOCKOUT_MS);
+      const next = registerFailure({ attempts: pinAttempts, lockUntil });
+      setPinAttempts(next.attempts);
+      setLockUntil(next.lockUntil);
+      await saveLockout(firebaseUser.id, next);
+      if (next.lockUntil) {
         setError('Too many incorrect attempts. Try again in 5 minutes.');
       } else {
-        setError(`Incorrect password. ${MAX_PIN_ATTEMPTS - nextPinAttempts} attempt(s) remaining.`);
+        setError(`Incorrect password. ${MAX_PIN_ATTEMPTS - next.attempts} attempt(s) remaining.`);
       }
     } finally {
       setVerifying(false);
