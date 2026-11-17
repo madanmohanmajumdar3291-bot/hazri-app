@@ -78,7 +78,8 @@ Deno.serve(async (req: Request) => {
     if (createError) {
       const message = /already.*registered|already.*exists/i.test(createError.message)
         ? "EMAIL_ALREADY_EXISTS"
-        : createError.message;
+        : "Could not create the account. Please check your details and try again.";
+      if (message !== "EMAIL_ALREADY_EXISTS") console.error("signup-owner auth:", createError.message);
       return json({ error: message }, 400);
     }
 
@@ -90,8 +91,9 @@ Deno.serve(async (req: Request) => {
       .select()
       .single();
     if (companyError) {
+      console.error("signup-owner company:", companyError.message);
       await admin.auth.admin.deleteUser(uid);
-      return json({ error: companyError.message }, 500);
+      return json({ error: "Could not create the account. Please try again." }, 500);
     }
 
     const { data: userRow, error: userError } = await admin
@@ -108,8 +110,9 @@ Deno.serve(async (req: Request) => {
       .single();
     if (userError) {
       await admin.from("companies").delete().eq("id", company.id);
+      console.error("signup-owner user:", userError.message);
       await admin.auth.admin.deleteUser(uid);
-      return json({ error: userError.message }, 500);
+      return json({ error: "Could not create the account. Please try again." }, 500);
     }
 
     return json({ user: userRow });
