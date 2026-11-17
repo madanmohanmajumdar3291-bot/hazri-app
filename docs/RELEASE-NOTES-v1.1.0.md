@@ -94,7 +94,7 @@ Because `runtimeVersion` follows the app version, OTA updates published for 1.1.
 | Face matching is on the phone; the server cannot verify identity. AWS Rekognition support exists but AWS keys are not configured. | Needs an AWS account and a cost decision. |
 | Face templates are cached unencrypted in SQLite on the phone (now per company and wiped on logout). | SQLCipher needs a native rebuild and a migration of existing databases; should be done with device testing. |
 | Late/absent notifications are saved as settings but never sent. | No sending service exists yet (needs push setup or SMS/WhatsApp provider). |
-| No alerting on critical errors; reports land in `client_errors` only. | Needs a channel (email, Telegram, Slack) from you. |
+| WhatsApp alerts for crashes and unsyncable attendance (`error-alerts` function, 15-minute cron) are deployed but send nothing until the CallMeBot key is added (`20261117b_error_alerts.sql`). CallMeBot is a free third-party relay, not the official WhatsApp Business API. | Needs your CallMeBot key. |
 | One owner account still has an old 25-point face template that no longer matches; that owner must re-register their face. | Needs the person. |
 | v1.0.x phones keep offline duplicates queued (rejected by the new unique key) until updated. | Expected; data is not lost. |
 | `get_email_for_phone` still callable anonymously. | Old v1.0.0/1.0.1 phones still use it; revoke with migration 20261104b once they are gone. |
