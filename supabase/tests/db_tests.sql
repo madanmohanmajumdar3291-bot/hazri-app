@@ -183,4 +183,12 @@ select pg_temp.ok((select count(*) = 0 from client_errors), 'error reports are w
 select pg_temp.expect_error($$select current_company_id()$$, '42501', 'anon cannot call current_company_id');
 reset role;
 
+-- ===================== advisor follow-up =====================
+select pg_temp.ok(not has_function_privilege('authenticated', 'public.guard_users_update()', 'execute')
+               and not has_function_privilege('anon', 'public.audit_attendance()', 'execute')
+               and not has_function_privilege('authenticated', 'public.stamp_client_error()', 'execute'),
+                  'trigger functions are not callable over the API');
+select pg_temp.ok(not has_function_privilege('anon', 'public.haversine_m(double precision,double precision,double precision,double precision)', 'execute'),
+                  'anon cannot call haversine_m');
+
 \echo 'ALL DATABASE TESTS PASSED'

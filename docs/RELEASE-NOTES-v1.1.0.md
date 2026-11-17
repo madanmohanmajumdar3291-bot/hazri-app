@@ -1,7 +1,7 @@
 # Hazri 1.1.0: release notes
 
 Security and reliability release. No screens were redesigned and no features were removed.
-Requires the database migration `supabase/migrations/20261116_v110_hardening.sql` and redeploying the `phone-login` and `signup-owner` edge functions.
+Requires the database migrations `supabase/migrations/20261116_v110_hardening.sql` and `20261117_v110_followup.sql`, and redeploying the `phone-login` and `signup-owner` edge functions.
 
 ## For owners (plain language)
 
@@ -31,6 +31,7 @@ Requires the database migration `supabase/migrations/20261116_v110_hardening.sql
 | Table `client_errors` (insert-only) for crash reports; sender is stamped server-side. | H11 |
 | `mark_daily_absences`: skips the shift's weekly off, marks approved leave as leave, skips days before the employee was added. | M5 |
 | `current_company_id()` / `current_role()` no longer callable anonymously. | M11 |
+| Follow-up `20261117_v110_followup.sql`: trigger functions are no longer callable over the REST API; `haversine_m` has a fixed search_path and is not callable anonymously (Supabase security advisor). | Advisor |
 
 ### Edge functions
 - `phone-login`: per-number lockout (5 failures / 15 min) and per-IP limit (30 / 15 min). Unknown numbers count too, so the lock reveals nothing.
@@ -57,7 +58,7 @@ Requires the database migration `supabase/migrations/20261116_v110_hardening.sql
 | Suite | Result | What it covers |
 |---|---|---|
 | `npm test` (Jest, 8 suites) | **46 / 46 passed** | Offline sync against a real SQLite engine (dedupe, idempotency, backoff, permanent failures, signed-out, mid-flight checkout, legacy rows), face matching rules, offline check-in/out, per-company cache, secure storage (chunking, migration, torn writes, fallback), crash-report scrubbing and rate limits, password lockout, kiosk navigation lock, login throttle, logout cache wipe, request timeout. |
-| `npm run test:db` (Postgres 16) | **37 / 37 passed** | Privilege escalation blocked, no client user inserts, cross-company reads and writes blocked, sync idempotency and merge, auto-absence replacement, late flag, clock and geofence checks, audit trail, no deletes, absence rules, storage isolation, crash-report table. |
+| `npm run test:db` (Postgres 16) | **38 / 38 passed** | Privilege escalation blocked, no client user inserts, cross-company reads and writes blocked, sync idempotency and merge, auto-absence replacement, late flag, clock and geofence checks, audit trail, no deletes, absence rules, storage isolation, crash-report table, trigger functions not callable over the API. |
 | `npx expo export --platform android` | **Bundles cleanly** (Hermes bytecode, 7.2 MB) | Whole app compiles. |
 | Edge function TypeScript | Parses cleanly | Not executed under Deno (Deno could not be installed in this environment). |
 
@@ -65,8 +66,8 @@ Requires the database migration `supabase/migrations/20261116_v110_hardening.sql
 
 ## Upgrade order
 
-1. Apply the migration (data was backed up first).
-2. Deploy `phone-login` and `signup-owner`.
+1. Apply the migration (data was backed up first). Done 2026-11-17. Then apply the follow-up migration.
+2. Deploy `phone-login` and `signup-owner`. Done 2026-11-17.
 3. Build the v1.1.0 APK on EAS (`preview` profile), install on a test phone, run the checklist below.
 4. Publish the APK as release v1.1.0 (v1.0.2 stays untouched), then point `app_releases` at it.
 
